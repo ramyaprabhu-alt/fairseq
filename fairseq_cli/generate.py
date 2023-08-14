@@ -93,8 +93,12 @@ def _main(cfg: DictConfig, output_file):
     overrides = ast.literal_eval(cfg.common_eval.model_overrides)
 
     # Load ensemble
+    cfg.common_eval.is_moe=True
+    print(cfg.checkpoint.checkpoint_shard_count)
     logger.info("loading model(s) from {}".format(cfg.common_eval.path))
-    if cfg.common_eval.is_moe and torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1:
+    print(cfg.common_eval.is_moe)
+    print(torch.distributed.is_initialized())
+    if cfg.common_eval.is_moe and torch.distributed.is_initialized() and torch.distributed.get_world_size() >= 1:
         cfg.checkpoint.checkpoint_suffix = f"-rank-{torch.distributed.get_rank()}"
         moe_freq = 1
     else:

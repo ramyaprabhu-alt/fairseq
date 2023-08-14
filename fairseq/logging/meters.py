@@ -170,9 +170,11 @@ class StopwatchMeter(Meter):
         self.sum = 0
         self.n = 0
         self.start_time = None
+        self.delta = 0
 
     def start(self):
         self.start_time = time.perf_counter()
+        self.delta = 0
 
     def stop(self, n=1, prehook=None):
         if self.start_time is not None:
@@ -181,6 +183,7 @@ class StopwatchMeter(Meter):
             delta = time.perf_counter() - self.start_time
             self.sum = self.sum + delta
             self.n = type_as(self.n, n) + n
+            self.delta=delta
 
     def reset(self):
         self.sum = 0  # cumulative time during which stopwatch was active
@@ -192,13 +195,18 @@ class StopwatchMeter(Meter):
             "sum": self.sum,
             "n": self.n,
             "round": self.round,
+            "delta": self.delta,
         }
+
+    def get_delta(self):
+        return float(self.delta)
 
     def load_state_dict(self, state_dict):
         self.sum = state_dict["sum"]
         self.n = state_dict["n"]
         self.start_time = None
         self.round = state_dict.get("round", None)
+        self.delta = state_dict["delta"]
 
     @property
     def avg(self):

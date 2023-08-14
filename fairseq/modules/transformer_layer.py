@@ -368,6 +368,7 @@ class TransformerDecoderLayer(nn.Module):
                 self.quant_noise_block_size,
             )
         else:
+            print('making MoE layer')
 
             if args.moe_top1_expert:
                 gate = Top1Gate(
@@ -377,6 +378,7 @@ class TransformerDecoderLayer(nn.Module):
                     moe_eval_capacity_token_fraction=getattr(args, "moe_eval_capacity_token_fraction", 0.25),
                 )
             else:
+                print('layers gate top 2')
                 gate = Top2Gate(
                     self.embed_dim,
                     args.moe_expert_count,

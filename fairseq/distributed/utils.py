@@ -340,7 +340,7 @@ def distributed_main(i, main, cfg: FairseqConfig, kwargs):
 
 def call_main(cfg: FairseqConfig, main, **kwargs):
     if cfg.distributed_training.distributed_init_method is None:
-        infer_init_method(cfg.distributed_training)
+        infer_init_method(cfg.distributed_training, force_distributed=True)
 
     if cfg.distributed_training.distributed_init_method is not None:
         # distributed training
@@ -436,7 +436,9 @@ def get_global_group():
         return None
 
 def get_moe_group(moe_expert_count):
+    print('line 439')
     if torch.distributed.is_initialized():
+        print('line 440')
         if not hasattr(get_moe_group, "_moe_groups"):
             world_size = get_global_world_size()
 
@@ -451,12 +453,36 @@ def get_moe_group(moe_expert_count):
                 ranks_per_group = world_size // moe_expert_count
                 moe_groups = [[i + j * moe_expert_count for j in range(ranks_per_group)]
                                 for i in range(moe_expert_count)]
-
+            print('get moe group')
+            print(get_moe_group)
             get_moe_group._moe_group_idx = moe_groups
             get_moe_group._moe_groups = [dist.new_group(g) for g in moe_groups]
 
         my_group_idx = _find_my_group_index(get_moe_group._moe_group_idx)
         return get_moe_group._moe_groups[my_group_idx]
+    else:
+        if not hasattr(get_moe_group, "_moe_groups"):
+            world_size = 1
+
+            # more experts than world size
+            if world_size <= moe_expert_count:
+                assert moe_expert_count % world_size == 0
+                moe_groups = [[i] for i in range(world_size)]
+
+            # larger world than num experts
+            else:
+                assert world_size % moe_expert_count == 0
+                ranks_per_group = world_size // moe_expert_count
+                moe_groups = [[i + j * moe_expert_count for j in range(ranks_per_group)]
+                                for i in range(moe_expert_count)]
+            print('get moe group')
+            print(get_moe_group)
+            get_moe_group._moe_group_idx = moe_groups
+            get_moe_group._moe_groups = [dist.new_group(g) for g in moe_groups]
+
+        my_group_idx = _find_my_group_index(get_moe_group._moe_group_idx)
+        return get_moe_group._moe_groups[my_group_idx]
+
 
 def get_all2all_group(moe_expert_count):
     if torch.distributed.is_initialized():

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import fairseq
 from fairseq import utils
 from fairseq.distributed import utils as dist_utils, fsdp_wrap
 from fairseq.models import (
@@ -776,8 +777,10 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         else:
             self.layers = nn.ModuleList([])
         moe_freq = max(getattr(args, 'decoder_moe_freq', 0), getattr(args, 'moe_freq', 0))
+        print(moe_freq)
         for i in range(args.decoder_layers):
             is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
+            print('Is MoE layer? 782'+str(is_moe_layer)+", no_encoder: "+str(no_encoder_attn))
             self.layers.append(
                 self.build_decoder_layer(
                     args, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer,
@@ -828,9 +831,11 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
 
     def build_decoder_layer(self, args, no_encoder_attn=False, is_moe_layer=False):
-        layer = TransformerDecoderLayer(
+        print(args)
+        layer = fairseq.modules.TransformerDecoderLayer(
             args, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer
         )
+        print('is_moe_layer: '+str(is_moe_layer))
         checkpoint = getattr(args, "checkpoint_activations", False)
         if checkpoint:
             offload_to_cpu = getattr(args, "offload_activations", False)
@@ -841,6 +846,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             getattr(args, "min_params_to_wrap", DEFAULT_MIN_PARAMS_TO_WRAP)
             if not checkpoint else 0
         )
+        print('printing moe expert count')
+        print(getattr(args, "moe_expert_count", -1))
         if not is_moe_layer or getattr(args, "ddp_backend", None) != "fully_sharded":
             layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         else:

@@ -28,7 +28,7 @@ from fairseq.logging.meters import StopwatchMeter
 from fairseq.sequence_scorer import SequenceScorer
 from omegaconf import DictConfig
 import time
-
+import matplotlib.pyplot as plt
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -86,8 +86,10 @@ def eval_lm(
     if device is None:
         device = next(models[0].parameters()).device
 
+    
     gen_timer = StopwatchMeter()
     scorer = SequenceScorer(target_dictionary, softmax_batch)
+    latency_vec=[]
 
     score_sum = 0.0
     count = 0
@@ -111,7 +113,7 @@ def eval_lm(
 
     word_stats = dict()
     first_batch = None
-
+    print(len(batch_iterator))
     for i, sample in enumerate(batch_iterator):
         if max_valid_steps is not None and i > max_valid_steps:
             break
@@ -130,7 +132,12 @@ def eval_lm(
 
         gen_timer.start()
         hypos = scorer.generate(models, sample)
+        print(hypos)
+        
         gen_timer.stop(sample["ntokens"])
+        delta=gen_timer.get_delta()
+        print("RAMYA, LINE 135! "+str(delta))
+        latency_vec.append(delta)
 
         # Don't calculate score for dummy batch
         if is_dummy_batch:
@@ -141,6 +148,11 @@ def eval_lm(
             sample_id = sample["id"][i]
 
             tokens = hypo["tokens"]
+            print('Printing tokens:')
+            print(tokens)
+            print('now, its shape')
+            print(tokens.shape)
+            
             tgt_len = tokens.numel()
             pos_scores = hypo["positional_scores"].float()
 
@@ -219,6 +231,7 @@ def eval_lm(
         "r0_tps_step": 1.0 / gen_timer.avg if gen_timer.avg > 0 else 0,
         "ntok_total": tokens,
         "gpu_step_seconds": gpu_seconds_taken,
+        "latency_vector" : latency_vec,
     }
 
 
@@ -381,6 +394,7 @@ def main(cfg: DictConfig, **unused_kwargs):
 
     # Load ensemble
     model_overrides['batch_size_valid'] = cfg.dataset.batch_size
+    print('Shard count: '+str(cfg.checkpoint.checkpoint_shard_count))
     models, model_args, task = checkpoint_utils.load_model_ensemble_and_task(
         utils.split_paths(cfg.common_eval.path),
         arg_overrides=model_overrides,
@@ -427,6 +441,15 @@ def main(cfg: DictConfig, **unused_kwargs):
         results, rr, end_time = eval_dataset(cfg, eval_split, task, models, start_time)
         start_time = end_time
         all_split_results[eval_split] = rr
+    fig, axs = plt.subplots(1, 1,
+                        figsize =(10, 7),
+                        tight_layout = True)
+    arr=axs.hist(results["latency_vector"], bins = 20)
+    for i in range(20):
+        plt.text(arr[1][i],arr[0][i],str(arr[0][i]))
+    print(results["latency_vector"])
+
+    plt.savefig("output.jpg")
 
     if isinstance(cfg.eval_lm.stats_path, str):
         save_path = f'{cfg.eval_lm.stats_path}.json'

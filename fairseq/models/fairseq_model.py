@@ -505,9 +505,11 @@ class FairseqLanguageModel(BaseFairseqModel):
                 - the decoder's output of shape `(batch, seq_len, vocab)`
                 - a dictionary with any model-specific outputs
         """
+        print('decoder forward pass!')
         return self.decoder(src_tokens, **kwargs)
 
     def forward_decoder(self, prev_output_tokens, **kwargs):
+        print('decoder forward pass autoregressive')
         return self.decoder(prev_output_tokens, **kwargs)
 
     def extract_features(self, src_tokens, **kwargs):

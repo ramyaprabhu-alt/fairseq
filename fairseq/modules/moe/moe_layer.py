@@ -82,6 +82,8 @@ class MOELayer(Base):
         else:
             self.experts = ModuleList([experts])
         self.expert_group = group if group is not None else distributed_utils.get_moe_group(args.moe_expert_count)
+        print("expert moe count: "+str(args.moe_expert_count))
+        print("expert self expert group: "+str(self.expert_group!=None))
         self.all2all_group = all2all_group if all2all_group is not None else distributed_utils.get_all2all_group(args.moe_expert_count)
         for p in experts.parameters():
             p.expert = True  # type: ignore
