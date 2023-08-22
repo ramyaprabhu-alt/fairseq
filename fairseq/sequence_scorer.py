@@ -7,7 +7,10 @@ import sys
 
 import torch
 from fairseq import utils
+import time
 
+def is_expert_param(p):
+        return getattr(p, "expert", False) or getattr(p, "base_expert", False)
 
 class SequenceScorer(object):
     """Scores the target for a given source sentence."""
@@ -35,6 +38,7 @@ class SequenceScorer(object):
     def generate(self, models, sample, **kwargs):
         """Score a batch of translations."""
         net_input = sample["net_input"]
+        
 
         def batch_for_softmax(dec_out, target):
             # assumes decoder_out[0] is the only thing needed (may not be correct for future models!)
@@ -59,19 +63,25 @@ class SequenceScorer(object):
             return probs
 
         orig_target = sample["target"]
-
+        latency_1 = []
+        latency_2 = []
         # compute scores for each model in the ensemble
         avg_probs = None
         avg_attn = None
         for model in models:
+            start_t = torch.cuda.Event(enable_timing=True)
+            end_t = torch.cuda.Event(enable_timing=True)
+            start_t_2 = torch.cuda.Event(enable_timing=True)
+            start_t.record()
+            # start_t = time.time()
             model.eval()
-            print('prabhu! line 68 seq_scorer')
-            print(net_input['src_tokens'].shape)
             decoder_out = model(**net_input)
-            print('Model type:')
-            print(type(model))
-            print(decoder_out[0].shape)
-            print(decoder_out[0])
+            end_t.record()
+            torch.cuda.synchronize()
+            # end_t = time.time()
+            delta=start_t.elapsed_time(end_t)
+            # delta = end_t-start_t
+            latency_1.append(delta)
             attn = decoder_out[1] if len(decoder_out) > 1 else None
             if type(attn) is dict:
                 attn = attn.get("attn", None)
@@ -145,6 +155,11 @@ class SequenceScorer(object):
                     alignment = None
             else:
                 avg_attn_i = alignment = None
+            start_t_2.record()
+            torch.cuda.synchronize()
+            latency_2.append(end_t.elapsed_time(start_t_2))
+            # start_t_2 = time.time()
+            # latency_2.append(start_t_2-end_t)
             hypos.append(
                 [
                     {
@@ -153,6 +168,8 @@ class SequenceScorer(object):
                         "attention": avg_attn_i,
                         "alignment": alignment,
                         "positional_scores": avg_probs_i,
+                        "model_input_lat" : latency_1,
+                        "logit_to_token" : latency_2,
                     }
                 ]
             )

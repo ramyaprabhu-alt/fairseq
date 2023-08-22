@@ -388,6 +388,7 @@ class TransformerLanguageModel(FairseqLanguageModel):
         decoder = TransformerDecoder(
             args, task.target_dictionary, embed_tokens, no_encoder_attn=True,
         )
+        print('out 3')
         return cls(decoder)
 
     @classmethod

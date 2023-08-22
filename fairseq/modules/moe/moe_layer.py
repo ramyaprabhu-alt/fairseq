@@ -173,13 +173,17 @@ class MOELayer(Base):
             dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
         else:
             l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(reshaped_input, reshaped_input_padding_mask)
-
+            print('combine weights:')
+            print(type(combine_weights[0][0]))
             dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
             E, C, S = dispatch_mask.size()
             M = reshaped_input.size(1)
             assert reshaped_input.size() == (S, M)
             # einsum("sec,sm->ecm")
             dispatched_input = torch.mm(dispatch_mask.view(E*C, S), reshaped_input)  # -> (E*C),M
+            print('E :')
+            print(E)
+            print('C: '+str(C)+' S: '+str(S)+' M: '+str(M))
 
         if self.all2all_size > 1:
             dispatched_input = self.all_to_all_wrapper(dispatched_input)
@@ -203,12 +207,18 @@ class MOELayer(Base):
         else:
             # einsum("sec,ecm->sm")
             combined_output = combine_weights.view(S, E*C).mm(expert_output.view(E*C, M))
-
+        print(combined_output.shape)
+        print('combined output: ')
+        print(combined_output.shape)
+        print('combined 2')
+        print(combined_output[0][0])
         # Remove padding here when --max-tokens is specified and not --batch-size or --max-sentences
         combined_output = combined_output[:reshaped_input_shape[0], :]
         combined_output = combined_output.reshape(input.shape)
         combined_output = combined_output[:input_shape[0], :, :]
-
+        print('meta-data :')
+        print(self.metadata)
+       
         self.record_all_to_all_stats()
 
         return combined_output, l_aux

@@ -29,6 +29,8 @@ from fairseq.sequence_scorer import SequenceScorer
 from omegaconf import DictConfig
 import time
 import matplotlib.pyplot as plt
+from time import perf_counter
+
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -38,6 +40,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("fairseq_cli.eval_lm")
 
+def trace_handler_moe(prof):
+    x=prof.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1, col_limit=-1)
+    print(x)
+    with open('pytorch_moe_text.txt','w') as p:
+        p.write(x)
+        p.write('\n')
+        p.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+    p.close()
+    prof.export_chrome_trace("/ramyapra/fairseq/output_trace_moe" + str(prof.step_num) + ".json")
+
+def trace_handler_dense(prof):
+    x=prof.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1)
+    print(x)
+    with open('pytorch_dense_text.txt','a') as p:
+        p.write(x)
+        p.write('\n')
+        p.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+    p.close()
+    prof.export_chrome_trace("output_trace_dense" + str(prof.step_num) + ".json")
 
 def eval_lm(
     models: List[fairseq.models.FairseqModel],
@@ -93,7 +116,8 @@ def eval_lm(
 
     score_sum = 0.0
     count = 0
-
+    time_2 = time.time()
+    start_to_time_2=time_2-start_time
     if post_process is not None:
         if post_process in {"subword_nmt", "@@ "}:
             bpe_cont = post_process.rstrip()
@@ -113,8 +137,23 @@ def eval_lm(
 
     word_stats = dict()
     first_batch = None
+    time_3 = time.time()
+    time_2_to_time_3=time_3-time_2
     print(len(batch_iterator))
+    latency_sample_1=[]
+    latency_sample_2=[]
+    full_lat = []
+    flag = 0
+    model_to_input = []
+    logit_to_token = []
+    print(len(batch_iterator))
+    print(batch_iterator)
+
     for i, sample in enumerate(batch_iterator):
+        flag+=1
+        time_4= time.time()
+        # print("printing sample: ")
+        # print(sample)
         if max_valid_steps is not None and i > max_valid_steps:
             break
         is_dummy_batch = False
@@ -129,23 +168,50 @@ def eval_lm(
                 continue
 
         sample = utils.move_to_cuda(sample, device=device)
-
+        print("I'm printing sample")
+        print(sample['net_input']['src_tokens'])
         gen_timer.start()
-        hypos = scorer.generate(models, sample)
-        print(hypos)
+        time_1_st=time.time()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        with torch.profiler.profile(activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
+            # schedule=torch.profiler.schedule(wait=1,
+            #                                  warmup=1,
+            #                                  active=2,
+            #                                  repeat=1),
+            # on_trace_ready=trace_handler_dense,
+            ) as p:
+            start.record()
+            hypos = scorer.generate(models, sample)
+            end.record()
+            p.step()
+        torch.cuda.synchronize()
+        time_1_end = time.time()        
+        print("I'm printing hypos") 
+        print(len(hypos))
+        print(type(hypos[0][0]))
+        logit_to_token.append(hypos[0][0]["logit_to_token"][0])
+        model_to_input.append(hypos[0][0]["model_input_lat"][0])
+        
         
         gen_timer.stop(sample["ntokens"])
-        delta=gen_timer.get_delta()
-        print("RAMYA, LINE 135! "+str(delta))
+        delta=time_1_end-time_1_st
+        delta=start.elapsed_time(end)
+        # print("RAMYA, LINE 135! "+str(delta))
         latency_vec.append(delta)
 
         # Don't calculate score for dummy batch
         if is_dummy_batch:
             continue
 
+        time_6 = time.time()
+        latency_sample_1.append(time_6-time_4)
         for i, hypos_i in enumerate(hypos):
             hypo = hypos_i[0]
             sample_id = sample["id"][i]
+            print(hypo.keys())
 
             tokens = hypo["tokens"]
             print('Printing tokens:')
@@ -215,12 +281,26 @@ def eval_lm(
                             )
                         )
                     )
+                if(flag==8):                    
+                    break
+        time_5=time.time()
+        latency_sample_2.append(time_5-time_6)
+        full_lat.append(time_5-time_4)
+        if(flag==8):
+            break
+    
+
+                    
 
     avg_nll_loss = get_aggregated_loss(score_sum, count)  # convert to base 2
     tokens, gpu_seconds_taken, avg_time = get_aggregated_timer_stats(gen_timer)
     end_time = time.time()
     tot_time = end_time-start_time
     logger.info(f"Evaluated {tokens:,} tokens in {tot_time:.1f}s ({tokens / tot_time:.2f} tokens/s)")
+    # with open(', 'w') as csvfile:
+    x=p.key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1)
+    print(x) 
     if output_word_stats:
         for ws in sorted(word_stats.values(), key=lambda x: x.count, reverse=True):
             logger.info(ws)
@@ -232,6 +312,14 @@ def eval_lm(
         "ntok_total": tokens,
         "gpu_step_seconds": gpu_seconds_taken,
         "latency_vector" : latency_vec,
+        "throughput_res" : f"Evaluated {tokens:,} tokens in {tot_time:.1f}s ({tokens / tot_time:.2f} tokens/s)",
+        "start_to_2" : start_to_time_2,
+        "latency_sample_1" : latency_sample_1,
+        "latency_sample_2" : latency_sample_2,
+        "full_latency" : full_lat,
+        "model_to_input" : model_to_input,
+        "logit_to_token" : logit_to_token,
+        "profiler" : p,
     }
 
 
@@ -448,9 +536,59 @@ def main(cfg: DictConfig, **unused_kwargs):
     for i in range(20):
         plt.text(arr[1][i],arr[0][i],str(arr[0][i]))
     print(results["latency_vector"])
-
-    plt.savefig("output.jpg")
-
+    plt.xlabel("time(s)")
+    plt.ylabel("# tokens")
+    plt.legend(['distribution'])
+    plt.title('Histogram: Latency per token distribution')
+    plt.savefig("output_{mod}_{seq_len}_{num}.jpg".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,num=sum (p.numel () for p in models[0].parameters ())))
+    file="output_{mod}_{seq_len}_{num}.txt".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,num=sum(p.numel () for p in models[0].parameters ()))
+    import datetime
+    with open(file, 'a') as f:
+        f.write('\n')
+        f.write(results["throughput_res"])
+        f.write('\n')
+        f.write("{} Loss (base 2): {:.4f}, Perplexity: {:.2f}".format(
+            eval_split, results["loss"], results["perplexity"]
+        ))
+        f.write('\n')
+        f.write(str(datetime.datetime.now()))
+        f.write('\n')
+        f.write("time taken from start till after the post process flags:  ")
+        f.write(str(results["start_to_2"]))
+        f.write('\n')
+        f.write("time taken for the first half of the for loop [has generate:]:  ")
+        f.write(str(sum(results["latency_sample_1"])/len(results["latency_sample_1"])))
+        f.write('\n')
+        f.write("time taken for the second for loop [scoring]:  ")
+        f.write(str(len(results["latency_sample_2"])))
+        f.write('\n')
+        f.write(str(sum(results["latency_sample_2"])/len(results["latency_sample_2"])))
+        f.write('\n')
+        f.write("Time for model to run:  ")
+        f.write(str(len(results["model_to_input"])))
+        f.write('\n')
+        f.write(str(sum(results["model_to_input"])/len(results["model_to_input"])))
+        f.write('\n')
+        f.write(str(results["model_to_input"]))
+        f.write('\n')
+        f.write("Time for logit to tokens:  ")
+        f.write(str(len(results["logit_to_token"])))
+        f.write('\n')
+        f.write(str(sum(results["logit_to_token"])/len(results["logit_to_token"])))
+        f.write('\n')
+        f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+        f.write('\n')
+        
+        
+    f.close()
+    file="profiler_output_{moe}_{seq_len}.txt".format(moe="MoE" if is_moe else "Dense", seq_len=cfg.task.tokens_per_sample)
+    with open(file, 'w') as f:
+        f.write(results["profiler"].key_averages().table(
+        sort_by="self_cuda_time_total", row_limit=-1))
+        f.write('\n')
+        f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+        f.write('\n')
+    f.close()
     if isinstance(cfg.eval_lm.stats_path, str):
         save_path = f'{cfg.eval_lm.stats_path}.json'
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -463,6 +601,7 @@ def main(cfg: DictConfig, **unused_kwargs):
 def cli_main():
     parser = options.get_eval_lm_parser()
     args = options.parse_args_and_arch(parser)
+    args.record_a2a_perf_stats = True
 
     distributed_utils.call_main(convert_namespace_to_omegaconf(args), main)
 

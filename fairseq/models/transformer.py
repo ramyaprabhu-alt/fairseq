@@ -786,7 +786,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                     args, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer,
                 )
             )
-
+        print('line 789, transformers.py')
         self.num_layers = len(self.layers)
 
         if args.decoder_normalize_before and not getattr(
@@ -795,16 +795,18 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self.layer_norm = LayerNorm(embed_dim)
         else:
             self.layer_norm = None
-
+        print('line 798, transformers.py')
         self.project_out_dim = (
             Linear(embed_dim, self.output_embed_dim, bias=False)
             if embed_dim != self.output_embed_dim and not args.tie_adaptive_weights
             else None
         )
-
+        print('line 804, transformers.py')
         self.adaptive_softmax = None
         self.output_projection = None
+        print('line 807, transformers.py')
         if args.adaptive_softmax_cutoff is not None:
+            print('line 7, transformers.py')
             self.adaptive_softmax = AdaptiveSoftmax(
                 len(dictionary),
                 self.output_embed_dim,
@@ -814,14 +816,19 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 factor=args.adaptive_softmax_factor,
                 tie_proj=args.tie_adaptive_proj,
             )
+            
         elif self.share_input_output_embed:
+            print('line 8, transformers.py')
             self.output_projection = nn.Linear(
                 self.embed_tokens.weight.shape[1],
                 self.embed_tokens.weight.shape[0],
                 bias=False,
             )
+            print('out 1')
             self.output_projection.weight = self.embed_tokens.weight
+            print('out 2')
         else:
+            print('line 9, transformers.py')
             self.output_projection = nn.Linear(
                 self.output_embed_dim, len(dictionary), bias=False
             )
