@@ -117,7 +117,7 @@ def eval_lm(
     score_sum = 0.0
     count = 0
     time_2 = time.time()
-    start_to_time_2=time_2-start_time
+    start_to_time_2=(time_2-start_time)*1000
     if post_process is not None:
         if post_process in {"subword_nmt", "@@ "}:
             bpe_cont = post_process.rstrip()
@@ -174,40 +174,42 @@ def eval_lm(
         time_1_st=time.time()
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
-        with torch.profiler.profile(activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
-            # schedule=torch.profiler.schedule(wait=1,
-            #                                  warmup=1,
-            #                                  active=2,
-            #                                  repeat=1),
-            # on_trace_ready=trace_handler_dense,
-            ) as p:
-            start.record()
-            hypos = scorer.generate(models, sample)
-            end.record()
-            p.step()
+        # with torch.profiler.profile(activities=[
+        #     torch.profiler.ProfilerActivity.CPU,
+        #     torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
+        #     # schedule=torch.profiler.schedule(wait=1,
+        #     #                                  warmup=1,
+        #     #                                  active=2,
+        #     #                                  repeat=1),
+        #     # on_trace_ready=trace_handler_dense,
+        #     ) as p:
+        start.record()
+        hypos = scorer.generate(models, sample)
+        end.record()
+        # p.step()
         torch.cuda.synchronize()
         time_1_end = time.time()        
         print("I'm printing hypos") 
         print(len(hypos))
         print(type(hypos[0][0]))
-        logit_to_token.append(hypos[0][0]["logit_to_token"][0])
-        model_to_input.append(hypos[0][0]["model_input_lat"][0])
-        
+        if flag!=1:
+            logit_to_token.append(hypos[0][0]["logit_to_token"][0])
+            model_to_input.append(hypos[0][0]["model_input_lat"][0])
         
         gen_timer.stop(sample["ntokens"])
         delta=time_1_end-time_1_st
         delta=start.elapsed_time(end)
         # print("RAMYA, LINE 135! "+str(delta))
-        latency_vec.append(delta)
+        if flag!=1:
+            latency_vec.append(delta)
 
         # Don't calculate score for dummy batch
         if is_dummy_batch:
             continue
 
         time_6 = time.time()
-        latency_sample_1.append(time_6-time_4)
+        if flag!=1:
+            latency_sample_1.append((time_6-time_4)*1000)
         for i, hypos_i in enumerate(hypos):
             hypo = hypos_i[0]
             sample_id = sample["id"][i]
@@ -281,13 +283,14 @@ def eval_lm(
                             )
                         )
                     )
-                if(flag==8):                    
-                    break
+                # if(flag==8):                    
+                #     break
         time_5=time.time()
-        latency_sample_2.append(time_5-time_6)
-        full_lat.append(time_5-time_4)
-        if(flag==8):
-            break
+        if flag!=1:
+            latency_sample_2.append((time_5-time_6)*1000)
+            full_lat.append((time_5-time_4)*1000)
+        # if(flag==8):
+        #     break
     
 
                     
@@ -298,9 +301,9 @@ def eval_lm(
     tot_time = end_time-start_time
     logger.info(f"Evaluated {tokens:,} tokens in {tot_time:.1f}s ({tokens / tot_time:.2f} tokens/s)")
     # with open(', 'w') as csvfile:
-    x=p.key_averages().table(
-        sort_by="self_cuda_time_total", row_limit=-1)
-    print(x) 
+    # x=p.key_averages().table(
+    #     sort_by="self_cuda_time_total", row_limit=-1)
+    # print(x) 
     if output_word_stats:
         for ws in sorted(word_stats.values(), key=lambda x: x.count, reverse=True):
             logger.info(ws)
@@ -319,7 +322,7 @@ def eval_lm(
         "full_latency" : full_lat,
         "model_to_input" : model_to_input,
         "logit_to_token" : logit_to_token,
-        "profiler" : p,
+        # "profiler" : p,
     }
 
 
@@ -559,10 +562,16 @@ def main(cfg: DictConfig, **unused_kwargs):
         f.write("time taken for the first half of the for loop [has generate:]:  ")
         f.write(str(sum(results["latency_sample_1"])/len(results["latency_sample_1"])))
         f.write('\n')
+        f.write(str(sum(results["latency_sample_1"])))
+        f.write('\n')
+        f.write(str(len(results["latency_sample_1"])))
+        f.write('\n')
         f.write("time taken for the second for loop [scoring]:  ")
         f.write(str(len(results["latency_sample_2"])))
         f.write('\n')
         f.write(str(sum(results["latency_sample_2"])/len(results["latency_sample_2"])))
+        f.write('\n')
+        f.write(str(sum(results["latency_sample_2"])))
         f.write('\n')
         f.write("Time for model to run:  ")
         f.write(str(len(results["model_to_input"])))
@@ -571,24 +580,28 @@ def main(cfg: DictConfig, **unused_kwargs):
         f.write('\n')
         f.write(str(results["model_to_input"]))
         f.write('\n')
+        f.write(str(sum(results["model_to_input"])))
+        f.write('\n')
         f.write("Time for logit to tokens:  ")
         f.write(str(len(results["logit_to_token"])))
         f.write('\n')
         f.write(str(sum(results["logit_to_token"])/len(results["logit_to_token"])))
         f.write('\n')
+        f.write(str(sum(results["logit_to_token"])))
+        f.write('\n')
         f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
         f.write('\n')
         
         
     f.close()
-    file="profiler_output_{moe}_{seq_len}.txt".format(moe="MoE" if is_moe else "Dense", seq_len=cfg.task.tokens_per_sample)
-    with open(file, 'w') as f:
-        f.write(results["profiler"].key_averages().table(
-        sort_by="self_cuda_time_total", row_limit=-1))
-        f.write('\n')
-        f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
-        f.write('\n')
-    f.close()
+    # file="profiler_output_{moe}_{seq_len}.txt".format(moe="MoE" if is_moe else "Dense", seq_len=cfg.task.tokens_per_sample)
+    # with open(file, 'w') as f:
+    #     f.write(results["profiler"].key_averages().table(
+    #     sort_by="self_cuda_time_total", row_limit=-1))
+    #     f.write('\n')
+    #     f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+    #     f.write('\n')
+    # f.close()
     if isinstance(cfg.eval_lm.stats_path, str):
         save_path = f'{cfg.eval_lm.stats_path}.json'
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
