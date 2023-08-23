@@ -2,3 +2,6 @@
     path = fairseq/model_parallel/megatron
     url = https://github.com/ngoyal2707/Megatron-LM
     branch = fairseq
+[submodule "Megatron-LM"]
+	path = Megatron-LM
+	url = /ramyapra/fairseq/Megatron-LM
