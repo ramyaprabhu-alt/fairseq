@@ -300,7 +300,10 @@ class SequenceGenerator(nn.Module):
             original_batch_idxs = sample["id"]
         else:
             original_batch_idxs = torch.arange(0, bsz).type_as(tokens)
-
+        
+       
+        model_to_input = []
+        logit_to_token = []
         for step in range(max_len + 1):  # one extra step for EOS marker
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
@@ -317,15 +320,22 @@ class SequenceGenerator(nn.Module):
                 encoder_outs = self.model.reorder_encoder_out(
                     encoder_outs, reorder_state
                 )
-
+            
+            print("sequence_generator.py 321")
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
             lprobs, avg_attn_scores = self.model.forward_decoder(
                 tokens[:, : step + 1],
                 encoder_outs,
                 incremental_states,
                 self.temperature,
             )
-
+            end.record()
+            torch.cuda.synchronize()
+            model_to_input.append(start.elapsed_time(end))
             if self.lm_model is not None:
+                print("I'm here!!")
                 lm_out = self.lm_model(tokens[:, : step + 1])
                 probs = self.lm_model.get_normalized_probs(
                     lm_out, log_probs=True, sample=None
@@ -537,6 +547,9 @@ class SequenceGenerator(nn.Module):
 
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
+            start.record()
+            torch.cuda.synchronize()
+            logit_to_token.append(end.elapsed_time(start))
 
         # sort by score descending
         for sent in range(len(finalized)):
@@ -548,6 +561,10 @@ class SequenceGenerator(nn.Module):
             finalized[sent] = torch.jit.annotate(
                 List[Dict[str, Tensor]], finalized[sent]
             )
+        finalized[0][0]["model_to_input"] = model_to_input
+        finalized[0][0]["logit_to_token"] = logit_to_token
+        print("finaliszed, sequence_generator.py 564")
+        print(finalized)
         return finalized
 
     def _prefix_tokens(

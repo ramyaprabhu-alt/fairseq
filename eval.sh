@@ -13,4 +13,4 @@ python -m fairseq_cli.eval_lm $DATA_PATH \
   --is-moe \
   --distributed-world-size 1\
   --ddp-backend pytorch_ddp\
-  --model-overrides "{'world_size': 1, 'moe_eval_capacity_token_fraction': 0.05,}" #'decoder_layers': 6}"
+  --model-overrides "{'world_size': 1, 'moe_eval_capacity_token_fraction': 0.05, 'moe_expert_count': 16}"

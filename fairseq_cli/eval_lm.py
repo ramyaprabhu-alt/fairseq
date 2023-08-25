@@ -21,7 +21,7 @@ import torch
 import fairseq
 from fairseq.file_io import save_json
 from fairseq.utils import round_safe
-from fairseq import checkpoint_utils, distributed_utils, options, tasks, utils
+from fairseq import checkpoint_utils, distributed_utils, options, tasks, utils, search
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.logging import progress_bar
 from fairseq.logging.meters import StopwatchMeter
@@ -30,6 +30,14 @@ from omegaconf import DictConfig
 import time
 import matplotlib.pyplot as plt
 from time import perf_counter
+from fairseq.sequence_generator import (
+            SequenceGenerator,
+            SequenceGeneratorWithAlignment,
+        )
+try:
+    from fairseq.fb_sequence_generator import FBSequenceGenerator
+except ModuleNotFoundError:
+    pass
 
 
 logging.basicConfig(
@@ -112,6 +120,44 @@ def eval_lm(
     
     gen_timer = StopwatchMeter()
     scorer = SequenceScorer(target_dictionary, softmax_batch)
+    sampling = False
+    sampling_topk =  -1
+    sampling_topp =-1.0
+    diverse_beam_groups = -1
+    diverse_beam_strength = 0.5
+    match_source_len = False
+    diversity_rate = -1
+    constrained = False
+    prefix_allowed_tokens_fn = None
+    if (
+            sum(
+                int(cond)
+                for cond in [
+                    sampling,
+                    diverse_beam_groups > 0,
+                    match_source_len,
+                    diversity_rate > 0,
+                ]
+            )
+            > 1
+        ):
+            raise ValueError("Provided Search parameters are mutually exclusive.")
+    assert sampling_topk < 0 or sampling, "--sampling-topk requires --sampling"
+    assert sampling_topp < 0 or sampling, "--sampling-topp requires --sampling"
+    search_strategy = search.BeamSearch(target_dictionary)
+    generator = SequenceGenerator(models, 
+                                  target_dictionary,
+                                  beam_size=1,
+                                  max_len_a=0,
+                                  max_len_b=10,
+                                  min_len= 10,
+                                  normalize_scores=True,    
+                                  len_penalty=1,
+                                  unk_penalty=0,
+                                  temperature=1.0,
+                                  match_source_len= False,
+                                  no_repeat_ngram_size=0,
+                                  search_strategy=search_strategy,)
     latency_vec=[]
 
     score_sum = 0.0
@@ -148,7 +194,7 @@ def eval_lm(
     logit_to_token = []
     print(len(batch_iterator))
     print(batch_iterator)
-
+    
     for i, sample in enumerate(batch_iterator):
         flag+=1
         time_4= time.time()
@@ -184,7 +230,9 @@ def eval_lm(
         #     # on_trace_ready=trace_handler_dense,
         #     ) as p:
         start.record()
-        hypos = scorer.generate(models, sample)
+        # hypos = scorer.generate(models, sample)
+        hypos = generator.generate(models=models, sample=sample)
+        print(hypos)
         end.record()
         # p.step()
         torch.cuda.synchronize()
@@ -193,9 +241,10 @@ def eval_lm(
         print(len(hypos))
         print(type(hypos[0][0]))
         if flag!=1:
-            logit_to_token.append(hypos[0][0]["logit_to_token"][0])
-            model_to_input.append(hypos[0][0]["model_input_lat"][0])
-        
+            for i in range(len(hypos[0][0]["logit_to_token"])):
+                logit_to_token.append(hypos[0][0]["logit_to_token"][i])
+                model_to_input.append(hypos[0][0]["model_to_input"][i])
+        print("flag:  "+str(flag))
         gen_timer.stop(sample["ntokens"])
         delta=time_1_end-time_1_st
         delta=start.elapsed_time(end)
@@ -283,14 +332,14 @@ def eval_lm(
                             )
                         )
                     )
-                # if(flag==8):                    
+                # if(flag==4):                    
                 #     break
         time_5=time.time()
         if flag!=1:
             latency_sample_2.append((time_5-time_6)*1000)
             full_lat.append((time_5-time_4)*1000)
-        # if(flag==8):
-        #     break
+        if(flag==4):
+            break
     
 
                     
@@ -490,12 +539,13 @@ def main(cfg: DictConfig, **unused_kwargs):
         utils.split_paths(cfg.common_eval.path),
         arg_overrides=model_overrides,
         suffix=cfg.checkpoint.checkpoint_suffix,
-        strict=(cfg.checkpoint.checkpoint_shard_count == 1),
+        strict=False,
         num_shards=cfg.checkpoint.checkpoint_shard_count,
         task=task,
         is_moe=is_moe or is_base_moe,
     )
-
+    print("model modules: ")
+    print(str(models[0]))
     use_fp16 = cfg.common.fp16
     use_cuda = torch.cuda.is_available() and not cfg.common.cpu
     if use_cuda:

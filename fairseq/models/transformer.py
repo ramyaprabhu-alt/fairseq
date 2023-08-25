@@ -953,6 +953,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         )
         if not features_only:
             x = self.output_layer(x)
+        print("forward pass, transformer.py, 956")
         return x, extra
 
     def extract_features(

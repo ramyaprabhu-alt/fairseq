@@ -119,11 +119,39 @@ class BaseFairseqModel(nn.Module):
             model_cfg = convert_namespace_to_omegaconf(args).model
 
         self.upgrade_state_dict(state_dict)
+        # for i in state_dict:
+        #     print(state_dict[i].shape)
+        def prune_experts_and_layers(state_dict, model_cfg):
+            new_state_dict = dict()
+            for i in state_dict:
+                print("fairseq_model.py 127")
+                print(i)
+                print(state_dict[i].shape)
+                if "decoder.layers." in i:
+                    count_layer = int(i.split(".")[2])
+                    if count_layer >= model_cfg["decoder_layers"] :
+                        continue
+                if "moe_layer" in i:
+                    if "gate.wg.weight" not in i:
+                        count=int(i.split(".")[5])
+                        if count < model_cfg["moe_expert_count"]:
+                            new_state_dict[i]=state_dict[i]
+                    else:
+                        new_state_dict[i]=state_dict[i][0:model_cfg["moe_expert_count"]]
+            
+            return new_state_dict
 
         from fairseq.checkpoint_utils import prune_state_dict
-
+        
+        
         new_state_dict = prune_state_dict(state_dict, model_cfg)
-        return super().load_state_dict(new_state_dict, strict)
+        new_state_dict_2 = prune_experts_and_layers(new_state_dict, model_cfg)
+        with open('layers.txt', 'w') as f:
+            for i in new_state_dict_2:
+                f.write(i)
+                f.write("\n")
+        f.close()
+        return super().load_state_dict(new_state_dict_2, strict)
 
     def upgrade_state_dict(self, state_dict):
         """Upgrade old state dicts to work with newer code."""

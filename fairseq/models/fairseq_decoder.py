@@ -37,6 +37,7 @@ class FairseqDecoder(nn.Module):
             prev_output_tokens, encoder_out=encoder_out, **kwargs
         )
         x = self.output_layer(x)
+        print("forward pass ho riya hai!! ")
         return x, extra
 
     def extract_features(self, prev_output_tokens, encoder_out=None, **kwargs):

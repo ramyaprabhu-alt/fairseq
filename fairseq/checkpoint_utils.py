@@ -704,6 +704,7 @@ def prune_state_dict(state_dict, model_cfg: Optional[DictConfig]):
     logger.info(
         "Pruning model to specified layer configuration - this works best if the model was trained with LayerDrop"
     )
+    # print(state_dict)
 
     def create_pruning_pass(layers_to_keep, layer_name):
         keep_layers = sorted(

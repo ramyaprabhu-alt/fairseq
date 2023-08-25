@@ -68,6 +68,7 @@ class SequenceScorer(object):
         # compute scores for each model in the ensemble
         avg_probs = None
         avg_attn = None
+        beam_size = 1
         for model in models:
             start_t = torch.cuda.Event(enable_timing=True)
             end_t = torch.cuda.Event(enable_timing=True)
@@ -76,6 +77,9 @@ class SequenceScorer(object):
             # start_t = time.time()
             model.eval()
             decoder_out = model(**net_input)
+            # output = model.generate(decoder_out, eos_idx=1, num_beams=beam_size)
+            # print('output is being printed: ')
+            # print(output)
             end_t.record()
             torch.cuda.synchronize()
             # end_t = time.time()
