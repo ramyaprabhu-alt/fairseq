@@ -151,6 +151,8 @@ class MultiheadAttention(nn.Module):
         assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
         if key is not None:
+            print('line 154, multihead attn')
+            print(key.size())
             src_len, key_bsz, _ = key.size()
             if not torch.jit.is_scripting():
                 assert key_bsz == bsz
@@ -269,6 +271,7 @@ class MultiheadAttention(nn.Module):
                 else:
                     assert k is not None
                     k = torch.cat([prev_key, k], dim=1)
+                print('line 272, multi head att')
                 src_len = k.size(1)
             if "prev_value" in saved_state:
                 _prev_value = saved_state["prev_value"]
@@ -299,12 +302,14 @@ class MultiheadAttention(nn.Module):
             incremental_state = self._set_input_buffer(incremental_state, saved_state)
         assert k is not None
         assert k.size(1) == src_len
-
+        print("multihead_attention, 302, key_padding_mask:")
+        # print(key_padding_mask.shape)
         # This is part of a workaround to get around fork/join parallelism
         # not supporting Optional types.
         if key_padding_mask is not None and key_padding_mask.dim() == 0:
             key_padding_mask = None
-
+        print("src len, multihead attn py")
+        print(src_len)
         if key_padding_mask is not None:
             assert key_padding_mask.size(0) == bsz
             assert key_padding_mask.size(1) == src_len

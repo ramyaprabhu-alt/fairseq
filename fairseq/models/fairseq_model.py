@@ -146,6 +146,7 @@ class BaseFairseqModel(nn.Module):
         
         new_state_dict = prune_state_dict(state_dict, model_cfg)
         new_state_dict_2 = prune_experts_and_layers(new_state_dict, model_cfg)
+        print(new_state_dict_2)
         with open('layers.txt', 'w') as f:
             for i in new_state_dict_2:
                 f.write(i)

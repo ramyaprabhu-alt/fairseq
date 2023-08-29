@@ -173,8 +173,10 @@ class MOELayer(Base):
             dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
         else:
             l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(reshaped_input, reshaped_input_padding_mask)
+            print('Dispatch masks: ')
+            print(dispatch_mask)
             print('combine weights:')
-            print(type(combine_weights[0][0]))
+            print(combine_weights)
             dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
             E, C, S = dispatch_mask.size()
             M = reshaped_input.size(1)

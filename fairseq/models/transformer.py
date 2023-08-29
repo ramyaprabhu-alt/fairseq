@@ -873,29 +873,31 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             positions = self.embed_positions(tokens, incremental_state=incremental_state)
 
         if incremental_state is not None:
-            tokens = tokens[:, -1:]
+            print(tokens.shape)
+            # tokens = tokens[:, -1:]
+            print(tokens.shape)
             if positions is not None:
                 positions = positions[:, -1:]
-
+        
         if token_embedding is None:
             token_embedding = self.embed_tokens(tokens)
-
+        print(tokens.shape)
         x = embed = self.embed_scale * token_embedding
-
+        print(x.shape)
         if self.quant_noise is not None:
             x = self.quant_noise(x)
-
+        print(x.shape)
         if self.project_in_dim is not None:
             x = self.project_in_dim(x)
-
+        print(x.shape)
         if positions is not None:
             x += positions
-
+        print(x.shape)
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
-
+        print(x.shape)
         x = self.dropout_module(x)
-
+        print(x.shape)
         return x, embed
 
     def forward(
@@ -941,6 +943,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 - the decoder's output of shape `(batch, tgt_len, vocab)`
                 - a dictionary with any model-specific outputs
         """
+        print(prev_output_tokens.shape)
+        print("transformer py 945, check token size")
         x, extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -994,6 +998,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         super().extract_features, but super() is not supported in torchscript. A copy
         of this function is made to be used in the subclass instead.
         """
+        print("transformer.py 997, in function extract_features_scriptable")
         if alignment_layer is None:
             alignment_layer = self.num_layers - 1
 
@@ -1010,11 +1015,14 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
         # embed tokens and positions
+        print(prev_output_tokens.shape)
         x, _ = self.forward_embedding(prev_output_tokens, token_embeddings, incremental_state)
-
+        print('1017 transformers py, ')
+        print(x.shape)
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
-
+        print("1021, transformers py x.shape")
+        print(x.shape)
         # decoder layers
         attn: Optional[Tensor] = None
         inner_states: List[Optional[Tensor]] = [x]
@@ -1027,7 +1035,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 self_attn_mask = self.buffered_future_mask(x)
             else:
                 self_attn_mask = None
-
+            print("1031 transformer.py ")
+            print(x.shape)
             x, layer_attn, _, l_aux_i = layer(
                 x,
                 encoder_out["encoder_out"][0]
@@ -1045,6 +1054,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
+            print("1048 transformer.py, x :")
+            print(x.shape)
             l_aux.append(l_aux_i)
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:

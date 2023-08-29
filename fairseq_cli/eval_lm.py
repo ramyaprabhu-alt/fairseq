@@ -338,8 +338,8 @@ def eval_lm(
         if flag!=1:
             latency_sample_2.append((time_5-time_6)*1000)
             full_lat.append((time_5-time_4)*1000)
-        if(flag==4):
-            break
+        # if(flag==4):
+        #     break
     
 
                     
@@ -576,7 +576,8 @@ def main(cfg: DictConfig, **unused_kwargs):
         languages = cfg.task.langs.split(',')
         for lang in languages:
             eval_splits.append(f'{cfg.dataset.gen_subset}_{lang}')
-    
+    print("eval_lm lin no 579")
+    print(cfg)
     all_split_results = dict()
     for eval_split in eval_splits:
         results, rr, end_time = eval_dataset(cfg, eval_split, task, models, start_time)
@@ -594,7 +595,11 @@ def main(cfg: DictConfig, **unused_kwargs):
     plt.legend(['distribution'])
     plt.title('Histogram: Latency per token distribution')
     plt.savefig("output_{mod}_{seq_len}_{num}.jpg".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,num=sum (p.numel () for p in models[0].parameters ())))
-    file="output_{mod}_{seq_len}_{num}.txt".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,num=sum(p.numel () for p in models[0].parameters ()))
+    print(type(cfg))
+    exp = dict(cfg)
+    print(model_overrides['moe_expert_count'])
+    #['common_eval']['model_overrides']['moe_expert_count']
+    file="output_{mod}_expert_count_{exp}_{seq_len}_{num}.txt".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,exp=model_overrides['moe_expert_count'],num=sum(p.numel () for p in models[0].parameters ()))
     import datetime
     with open(file, 'a') as f:
         f.write('\n')

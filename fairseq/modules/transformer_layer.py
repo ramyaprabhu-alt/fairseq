@@ -463,6 +463,7 @@ class TransformerDecoderLayer(nn.Module):
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
+        print(x.shape)
         if need_head_weights:
             need_attn = True
 
@@ -480,6 +481,8 @@ class TransformerDecoderLayer(nn.Module):
             assert incremental_state is not None
             self.self_attn._set_input_buffer(incremental_state, saved_state)
         _self_attn_input_buffer = self.self_attn._get_input_buffer(incremental_state)
+        print("line 483, trnsformer layer ")
+        print(x.shape)
         if self.cross_self_attention and not (
             incremental_state is not None
             and _self_attn_input_buffer is not None
@@ -503,7 +506,10 @@ class TransformerDecoderLayer(nn.Module):
             y = torch.cat((encoder_out, x), dim=0)
         else:
             y = x
-
+        print("transformer layer, this is X:")
+        print(x.shape)
+        print("transformer layer, this is Y:")
+        print(y.shape)
         x, attn = self.self_attn(
             query=x,
             key=y,

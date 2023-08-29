@@ -195,8 +195,11 @@ class SequenceGenerator(nn.Module):
                 for i in range(self.model.models_size)
             ],
         )
+        print("line 198, sequence_generator.py incremental states")
+        print(incremental_states)
         net_input = sample["net_input"]
-
+        print("I'm printing sample, 199 sequence_generator")
+        print(net_input)
         if "src_tokens" in net_input:
             src_tokens = net_input["src_tokens"]
             # length of the source text being the character length except EndOfSentence and pad
@@ -240,6 +243,8 @@ class SequenceGenerator(nn.Module):
         ), "min_len cannot be larger than max_len, please adjust these!"
         # compute the encoder output for each beam
         encoder_outs = self.model.forward_encoder(net_input)
+        print("244 i'm printing net input")
+        print(net_input)
 
         # placeholder of indices for bsz * beam_size to hold tokens and accumulative scores
         new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
@@ -258,6 +263,8 @@ class SequenceGenerator(nn.Module):
             .long()
             .fill_(self.pad)
         )  # +2 for eos and pad
+        print("262 sequence generator py tokens:")
+        print(tokens)
         tokens[:, 0] = self.eos if bos_token is None else bos_token
         attn: Optional[Tensor] = None
 
@@ -325,12 +332,17 @@ class SequenceGenerator(nn.Module):
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
+            print("329 sequence generator, tokens:")
+            print(src_tokens[:, step: src_len].shape)
+
             lprobs, avg_attn_scores = self.model.forward_decoder(
-                tokens[:, : step + 1],
+                src_tokens,
                 encoder_outs,
                 incremental_states,
                 self.temperature,
             )
+            print("sequence generator 344 lprobs")
+            print(lprobs.shape)
             end.record()
             torch.cuda.synchronize()
             model_to_input.append(start.elapsed_time(end))
@@ -521,6 +533,8 @@ class SequenceGenerator(nn.Module):
             # copy tokens and scores for active hypotheses
 
             # Set the tokens for each beam (can select the same row more than once)
+            print("sequence generator py 534 tokens")
+            print(tokens)
             tokens[:, : step + 1] = torch.index_select(
                 tokens[:, : step + 1], dim=0, index=active_bbsz_idx
             )
@@ -528,6 +542,12 @@ class SequenceGenerator(nn.Module):
             tokens.view(bsz, beam_size, -1)[:, :, step + 1] = torch.gather(
                 cand_indices, dim=1, index=active_hypos
             )
+            print("tokens sequence genrate 543")
+            # print(src_tokens.shape)
+            # print(torch.Tensor(tokens[0][step]))
+            # print(torch.cat((src_tokens[0],torch.Tensor(tokens[0][step]).reshape(1))))
+            # src_tokens =torch.cat((src_tokens[:, step: src_len],torch.Tensor(tokens[0][step]).reshape(1,1)), -1) 
+            print(src_tokens.shape)
             if step > 0:
                 scores[:, :step] = torch.index_select(
                     scores[:, :step], dim=0, index=active_bbsz_idx
@@ -788,13 +808,19 @@ class EnsembleModel(nn.Module):
             if self.has_encoder():
                 encoder_out = encoder_outs[i]
             # decode each model
+            print("800 sequence_generator.py: tokens")
+            print(tokens)
             if self.has_incremental_states():
+                print("printing the tokens, 793, sequence_generator py ")
+                print(tokens)
                 decoder_out = model.decoder.forward(
                     tokens,
                     encoder_out=encoder_out,
                     incremental_state=incremental_states[i],
                 )
             else:
+                print("printing the tokens, 801, sequence_generator py ")
+                print(tokens)
                 decoder_out = model.decoder.forward(tokens, encoder_out=encoder_out)
 
             attn: Optional[Tensor] = None

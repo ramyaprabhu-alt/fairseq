@@ -172,7 +172,7 @@ class SequenceScorer(object):
                         "attention": avg_attn_i,
                         "alignment": alignment,
                         "positional_scores": avg_probs_i,
-                        "model_input_lat" : latency_1,
+                        "model_to_input" : latency_1,
                         "logit_to_token" : latency_2,
                     }
                 ]
