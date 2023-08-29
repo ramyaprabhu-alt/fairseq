@@ -174,6 +174,7 @@ class MOELayer(Base):
         else:
             l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(reshaped_input, reshaped_input_padding_mask)
             print('Dispatch masks: ')
+            print(dispatch_mask.shape)
             print(dispatch_mask)
             print('combine weights:')
             print(combine_weights)
