@@ -23,9 +23,10 @@ from fairseq.file_io import save_json
 from fairseq.utils import round_safe
 from fairseq import checkpoint_utils, distributed_utils, options, tasks, utils, search
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
-from fairseq.logging import progress_bar
+from fairseq.logging import progress_bar, metrics
 from fairseq.logging.meters import StopwatchMeter
 from fairseq.sequence_scorer import SequenceScorer
+from fairseq.distributed import fsdp_enable_wrap, fsdp_wrap, utils as distributed_utils
 from omegaconf import DictConfig
 import time
 import matplotlib.pyplot as plt
@@ -150,7 +151,8 @@ def eval_lm(
                                   beam_size=1,
                                   max_len_a=0,
                                   max_len_b=10,
-                                  min_len= 10,
+                                  min_len= 0,
+                                  max_len=1,
                                   normalize_scores=True,    
                                   len_penalty=1,
                                   unk_penalty=0,
@@ -235,6 +237,7 @@ def eval_lm(
         start.record()
         # hypos = scorer.generate(models, sample)
         hypos = generator.generate(models=models, sample=sample)#, prefix_tokens=sample['net_input']['src_tokens'])
+        
         print(hypos)
         end.record()
         # p.step()
@@ -244,12 +247,14 @@ def eval_lm(
         print(len(hypos))
         print(type(hypos[0][0]))
         if flag!=1:
-            for i in range(len(hypos[0][0]["logit_to_token"])):
-                logit_to_token.append(hypos[0][0]["logit_to_token"][i])
+            print("I'm in here!")
+            for i in range(max(len(hypos[0][0]["logit_to_token"]),len(hypos[0][0]["per_forward_pass_attn"])),):
+                # logit_to_token.append(hypos[0][0]["logit_to_token"][i])
                 model_to_input.append(hypos[0][0]["model_to_input"][i])
                 per_forward_pass_attn.append(hypos[0][0]["per_forward_pass_attn"][i])
                 per_forward_pass_ffn.append(hypos[0][0]["per_forward_pass_ffn"][i])
-
+        print("run py Ffn and attn: ")
+        print(per_forward_pass_ffn)
         print("flag:  "+str(flag))
         gen_timer.stop(sample["ntokens"])
         delta=time_1_end-time_1_st
@@ -344,7 +349,9 @@ def eval_lm(
         if flag!=1:
             latency_sample_2.append((time_5-time_6)*1000)
             full_lat.append((time_5-time_4)*1000)
-        if(flag==4):
+        print(flag)
+        print("Flag I'm printing")
+        if(flag==8):
             break
     
 
@@ -521,14 +528,79 @@ def main(cfg: DictConfig, **unused_kwargs):
         logger.info(config_key + '\t' + str(config_content[config_key]))
     logger.info('---------------------------')
 
+    assert (
+        cfg.dataset.max_tokens is not None or cfg.dataset.batch_size is not None
+    ), "Must specify batch size either with --max-tokens or --batch-size"
+    metrics.reset()
+
+    if cfg.common.log_file is not None:
+        handler = logging.FileHandler(filename=cfg.common.log_file)
+        logger.addHandler(handler)
+
+    # Print nvidia smi stats
+    logger.info(metrics.get_nvidia_smi_gpu_memory_stats_str())
+
+    # Print args
+    logger.info(cfg)
+
+    if cfg.checkpoint.write_checkpoints_asynchronously:
+        try:
+            import iopath  # noqa: F401
+        except ImportError:
+            logging.exception(
+                "Asynchronous checkpoint writing is specified but iopath is "
+                "not installed: `pip install iopath`"
+            )
+            return
+
+    # Setup task, e.g., translation, language modeling, etc.
+    task = tasks.setup_task(cfg.task)
+
+    assert cfg.criterion, "Please specify criterion to train a model"
+    if getattr(cfg.model, "moe_freq", 0) > 0 and getattr(cfg.model, "moe_expert_count", 0) < distributed_utils.get_global_world_size():
+        assert cfg.distributed_training.ddp_backend == 'fully_sharded', 'num_experts < num_gpus only supported by FSDP'
+
+    # Build model and criterion
+    if cfg.distributed_training.ddp_backend == "fully_sharded":
+        #if cfg.distributed_training.use_sharded_state: assert cfg.checkpoint.no_save_optimizer_state, f'--use-sharded-state requires --no-save-optimizer-state'
+        extra = {
+            "is_moe": getattr(cfg.model, "moe_freq", 0) > 0,
+            "use_sharded_state": cfg.distributed_training.use_sharded_state,
+        }
+
+        with fsdp_enable_wrap(cfg.distributed_training, **extra):
+            model = fsdp_wrap(task.build_model(cfg.model))
+    else:
+        model = task.build_model(cfg.model)
+    criterion = task.build_criterion(cfg.criterion)
+
+    def is_expert_param(p):
+        return getattr(p, "expert", False) or getattr(p, "base_expert", False)
+
+    logger.info(model)
+    logger.info("task: {}".format(task.__class__.__name__))
+    logger.info("model: {}".format(model.__class__.__name__))
+    logger.info("criterion: {}".format(criterion.__class__.__name__))
+    logger.info(
+        "num. non-expert model params: {:,} (num. trained: {:,})".format(
+            sum(getattr(p, "_orig_size", p).numel() for p in model.parameters() if not is_expert_param(p)),
+            sum(getattr(p, "_orig_size", p).numel() for p in model.parameters() if not is_expert_param(p) and p.requires_grad),
+        )
+    )
+    logger.info(
+        "num. expert model params: {:,} (num. trained: {:,})".format(
+            sum(getattr(p, "_orig_size", p).numel() for p in model.parameters() if is_expert_param(p)),
+            sum(getattr(p, "_orig_size", p).numel() for p in model.parameters() if is_expert_param(p) and p.requires_grad),
+        )
+    )
+    logger.info(metrics.get_nvidia_smi_gpu_memory_stats_str())
+
     if cfg.eval_lm.context_window > 0:
         # reduce tokens per sample by the required context window size
         cfg.task.tokens_per_sample -= cfg.eval_lm.context_window
 
     logger.info("loading model(s) from {}".format(cfg.common_eval.path))
-    model_overrides = eval(cfg.common_eval.model_overrides)
-    is_base_moe = model_overrides.get('is_base_moe', False)
-    if cfg.common_eval.is_moe or is_base_moe:
+    if getattr(cfg.model, "moe_freq", 0) > 0: 
         rank = distributed_utils.get_data_parallel_rank()
         cfg.checkpoint.checkpoint_suffix = f"-rank-{rank}"
         is_moe = True
@@ -541,17 +613,7 @@ def main(cfg: DictConfig, **unused_kwargs):
     task = tasks.setup_task(cfg.task)
 
     # Load ensemble
-    model_overrides['batch_size_valid'] = cfg.dataset.batch_size
-    print('Shard count: '+str(cfg.checkpoint.checkpoint_shard_count))
-    models, model_args, task = checkpoint_utils.load_model_ensemble_and_task(
-        utils.split_paths(cfg.common_eval.path),
-        arg_overrides=model_overrides,
-        suffix=cfg.checkpoint.checkpoint_suffix,
-        strict=False,
-        num_shards=cfg.checkpoint.checkpoint_shard_count,
-        task=task,
-        is_moe=is_moe or is_base_moe,
-    )
+    models = [model]
     print("model modules: ")
     print(str(models[0]))
     use_fp16 = cfg.common.fp16
@@ -561,11 +623,13 @@ def main(cfg: DictConfig, **unused_kwargs):
 
     # Optimize ensemble for generation and set the source and dest dicts on the model
     # (required by scorer)
-    for model in models:
+    for i in range(len(models)):
         if use_fp16:
-            model.half()
+            models[i].half()
+        models[i] = torch.compile(models[i])
         if use_cuda and not cfg.distributed_training.pipeline_model_parallel:
-            model.cuda()
+            models[i].cuda()
+        
 
         if getattr(cfg.model, "moe_freq", 0) > 0:
             # For moe models, we want to enable padding in moe layer, so not calling this.
@@ -602,62 +666,63 @@ def main(cfg: DictConfig, **unused_kwargs):
     plt.ylabel("# tokens")
     plt.legend(['distribution'])
     plt.title('Histogram: Latency per token distribution')
-    plt.savefig("output_{mod}_{seq_len}_{num}.jpg".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,num=sum (p.numel () for p in models[0].parameters ())))
+    plt.savefig("output_{mod}_{seq_len}_{num}.jpg".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample , num=sum (p.numel () for p in models[0].parameters ())))
     print(type(cfg))
     exp = dict(cfg)
 #    print(model_overrides['moe_expert_count'])
     #['common_eval']['model_overrides']['moe_expert_count']
-    file="output_{mod}_expert_count_{exp}_{seq_len}_{num}.txt".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,exp=getattr(cfg.model, "moe_expert_count", 0) ,num=sum(p.numel () for p in model.parameters ()))
+    print(results)
+    file="output_{mod}_expert_count_{exp}_{seq_len}_{bsz}_{num}.txt".format(mod='moe' if is_moe else 'dense',seq_len=cfg.task.tokens_per_sample ,bsz=cfg.dataset.batch_size,exp=getattr(cfg.model, "moe_expert_count", 0),num=sum(p.numel () for p in models[0].parameters ()))
     import datetime
     with open(file, 'a') as f:
-        # f.write('\n')
-        # f.write(results["throughput_res"])
-        # f.write('\n')
-        # f.write("{} Loss (base 2): {:.4f}, Perplexity: {:.2f}".format(
-        #     eval_split, results["loss"], results["perplexity"]
-        # ))
-        # f.write('\n')
-        # f.write(str(datetime.datetime.now()))
-        # f.write('\n')
-        # f.write("time taken from start till after the post process flags:  ")
-        # f.write(str(results["start_to_2"]))
-        # f.write('\n')
-        # f.write("time taken for the first half of the for loop [has generate:]:  ")
-        # f.write(str(sum(results["latency_sample_1"])/len(results["latency_sample_1"])))
-        # f.write('\n')
-        # f.write(str(sum(results["latency_sample_1"])))
-        # f.write('\n')
-        # f.write(str(len(results["latency_sample_1"])))
-        # f.write('\n')
-        # f.write("time taken for the second for loop [scoring]:  ")
-        # f.write(str(len(results["latency_sample_2"])))
-        # f.write('\n')
-        # f.write(str(sum(results["latency_sample_2"])/len(results["latency_sample_2"])))
-        # f.write('\n')
-        # f.write(str(sum(results["latency_sample_2"])))
-        # f.write('\n')
+        f.write('\n')
+        f.write(results["throughput_res"])
+        f.write('\n')
+        f.write("{} Loss (base 2): {:.4f}, Perplexity: {:.2f}".format(
+            eval_split, results["loss"], results["perplexity"]
+        ))
+        f.write('\n')
+        f.write(str(datetime.datetime.now()))
+        f.write('\n')
+        f.write("time taken from start till after the post process flags:  ")
+        f.write(str(results["start_to_2"]))
+        f.write('\n')
+        f.write("time taken for the first half of the for loop [has generate:]:  ")
+        f.write(str(sum(results["latency_sample_1"])/len(results["latency_sample_1"])))
+        f.write('\n')
+        f.write(str(sum(results["latency_sample_1"])))
+        f.write('\n')
+        f.write(str(len(results["latency_sample_1"])))
+        f.write('\n')
+        f.write("time taken for the second for loop [scoring]:  ")
+        f.write(str(len(results["latency_sample_2"])))
+        f.write('\n')
+        f.write(str(sum(results["latency_sample_2"])/len(results["latency_sample_2"])))
+        f.write('\n')
+        f.write(str(sum(results["latency_sample_2"])))
+        f.write('\n')
         f.write("Time for model to run:  ")
         f.write(str(len(results["model_to_input"])))
         f.write('\n')
-        f.write(str(sum(results["model_to_input"])/len(results["model_to_input"])))
+        # f.write(str(sum(results["model_to_input"])/len(results["model_to_input"])))
         f.write('\n')
         f.write(str(results["model_to_input"]))
         f.write('\n')
         f.write(str(sum(results["model_to_input"])))
         f.write('\n')
-        # f.write("Time for logit to tokens:  ")
-        # f.write(str(len(results["logit_to_token"])))
-        # f.write('\n')
+        f.write("Time for logit to tokens:  ")
+        f.write(str(len(results["logit_to_token"])))
+        f.write('\n')
         # f.write(str(sum(results["logit_to_token"])/len(results["logit_to_token"])))
-        # f.write('\n')
-        # f.write(str(sum(results["logit_to_token"])))
-        # f.write('\n')
+        f.write('\n')
+        f.write(str(sum(results["logit_to_token"])))
+        f.write('\n')
         f.write("Per forward pass attn :  ")
         # f.write(str(len(results["per_forward_pass_attn"][0])))
         f.write("   ")
         f.write(str(len(results["per_forward_pass_attn"])))
         f.write('\n')
-        f.write(str(sum([x[0] for x in results["per_forward_pass_attn"]])/len(results["per_forward_pass_attn"])))
+        # f.write(str(sum([x[0] for x in results["per_forward_pass_attn"]])/len(results["per_forward_pass_attn"])))
         f.write('\n')
         f.write(str(results["per_forward_pass_attn"]))
         f.write('\n')
@@ -668,7 +733,7 @@ def main(cfg: DictConfig, **unused_kwargs):
         f.write("   ")
         f.write(str(len(results["per_forward_pass_ffn"])))
         f.write('\n')
-        f.write(str(sum([x[0] for x in results["per_forward_pass_ffn"]])/len(results["per_forward_pass_ffn"])))
+        # f.write(str(sum([x[0] for x in results["per_forward_pass_ffn"]])/len(results["per_forward_pass_ffn"])))
         f.write('\n')
         f.write(str(results["per_forward_pass_ffn"]))
         f.write('\n')
@@ -676,6 +741,7 @@ def main(cfg: DictConfig, **unused_kwargs):
         f.write('\n')
         f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
         f.write('\n')
+        
         
     f.close()
     # file="profiler_output_{moe}_{seq_len}.txt".format(moe="MoE" if is_moe else "Dense", seq_len=cfg.task.tokens_per_sample)
@@ -696,7 +762,7 @@ def main(cfg: DictConfig, **unused_kwargs):
 
 
 def cli_main():
-    parser = options.get_eval_lm_parser()
+    parser = options.get_runing_parser()
     args = options.parse_args_and_arch(parser)
     args.record_a2a_perf_stats = True
 

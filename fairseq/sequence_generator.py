@@ -291,7 +291,7 @@ class SequenceGenerator(nn.Module):
             torch.zeros(bsz * beam_size, max_len + 1).to(src_tokens).float()
         )  # +1 for eos; pad is never chosen for scoring
         tokens = (
-            torch.zeros(bsz * beam_size, src_len+max_len + 2)
+            torch.zeros(bsz * beam_size, max_len + 2)
             .to(src_tokens)
             .long()
             .fill_(self.pad)
@@ -340,7 +340,10 @@ class SequenceGenerator(nn.Module):
 
         model_to_input = []
         logit_to_token = []
-        
+        per_forward_pass_attn = []
+        per_forward_pass_ffn = []
+        print(max_len)
+        # exit(0)
         for step in range(max_len + 1):  # one extra step for EOS marker
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
@@ -361,18 +364,33 @@ class SequenceGenerator(nn.Module):
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
-            lprobs, avg_attn_scores = self.model.forward_decoder(
-                tokens[:, : src_len+step + 1],
+            # if step == 0:
+            print("sequence genrator py 365 incremental states")
+            print(len(incremental_states))
+            # lprobs, avg_attn_scores = self.model.forward_decoder(
+            #     tokens[:, :step+1], # src_len+step + 1], 
+            #     encoder_outs,
+            #     incremental_states,
+            #     self.temperature,
+            # )
+            # else:
+            lprobs, avg_attn_scores, time_log_attn, time_log_ffn = self.model.forward_decoder(
+                src_tokens[:, : src_len+step+1 ].to("cuda"),
                 encoder_outs,
                 incremental_states,
                 self.temperature,
             )
-            
             end.record()
             torch.cuda.synchronize()
             model_to_input.append(start.elapsed_time(end))
-           
+            per_forward_pass_attn.append(time_log_attn)
+            per_forward_pass_ffn.append(time_log_ffn)
+            print("386 seq_gen, ffn anf attn :")
+            print(per_forward_pass_attn)
+            print(per_forward_pass_ffn)
+            print(model_to_input)
             if self.lm_model is not None:
+                print("386 seq_gen")
                 lm_out = self.lm_model(tokens[:, : step + 1])
                 probs = self.lm_model.get_normalized_probs(
                     lm_out, log_probs=True, sample=None
@@ -606,7 +624,10 @@ class SequenceGenerator(nn.Module):
         
         finalized[0][0]["model_to_input"] = model_to_input
         finalized[0][0]["logit_to_token"] = logit_to_token
-        
+        finalized[0][0]["per_forward_pass_attn"] = per_forward_pass_attn
+        finalized[0][0]["per_forward_pass_ffn"] = per_forward_pass_ffn
+        print("626 seq generator ffn and attn:")
+        print(per_forward_pass_ffn)
         return finalized
 
     def _prefix_tokens(
@@ -829,8 +850,11 @@ class EnsembleModel(nn.Module):
         encoder_outs: List[Dict[str, List[Tensor]]],
         incremental_states: List[Dict[str, Dict[str, Optional[Tensor]]]],
         temperature: float = 1.0,
+        # kv_cache : List[Dict[str, ]]
     ):
         log_probs = []
+        time_log_attn = []
+        time_log_ffn = []
         avg_attn: Optional[Tensor] = None
         encoder_out: Optional[Dict[str, List[Tensor]]] = None
         for i, model in enumerate(self.models):
@@ -838,11 +862,24 @@ class EnsembleModel(nn.Module):
                 encoder_out = encoder_outs[i]
             # decode each model
             if self.has_incremental_states():
+                print("851 sequence generator, ")
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                start.record()
                 decoder_out = model.decoder.forward(
-                    tokens,
+                    tokens.to("cuda"),
                     encoder_out=encoder_out,
                     incremental_state=incremental_states[i],
                 )
+                print("seq_generator 863, decoder_out")
+                print(decoder_out)
+                end.record()
+                torch.cuda.synchronize()
+                delta=start.elapsed_time(end)
+                time_log_attn.append(decoder_out[1]["time_logs"][0])
+                time_log_ffn.append(decoder_out[1]["time_logs"][1])
+                print(time_log_attn)
+                print(time_log_ffn)
             else:
                 if hasattr(model, "decoder"):
                     decoder_out = model.decoder.forward(tokens, encoder_out=encoder_out)
@@ -872,7 +909,7 @@ class EnsembleModel(nn.Module):
             )
             probs = probs[:, -1, :]
             if self.models_size == 1:
-                return probs, attn
+                return probs, attn, time_log_attn, time_log_ffn
 
             log_probs.append(probs)
             if attn is not None:
@@ -887,7 +924,7 @@ class EnsembleModel(nn.Module):
 
         if avg_attn is not None:
             avg_attn.div_(self.models_size)
-        return avg_probs, avg_attn
+        return avg_probs, avg_attn, time_log_attn, time_log_ffn
 
     @torch.jit.export
     def reorder_encoder_out(

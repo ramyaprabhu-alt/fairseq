@@ -27,7 +27,7 @@ try:
     #   python3 -m pip install --user --upgrade git+https://github.com/microsoft/tutel@v0.1.x
     from tutel import moe as tutel_moe
 
-    has_tutel, fused_cumsum_sub_one = True, tutel_moe.fast_cumsum_sub_one
+    has_tutel, fused_cumsum_sub_one = False, tutel_moe.fast_cumsum_sub_one
 except ModuleNotFoundError:
     has_tutel, fused_cumsum_sub_one = False, lambda mask: torch.cumsum(mask, dim=0) - 1
 
@@ -96,6 +96,9 @@ class MOELayer(Base):
         self.a2a_cpu_time_ms = 0.0
 
     def forward(self, *input: Tensor, input_padding_mask=None, **kwargs: Any) -> Tensor:
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
         assert len(input) == 1, "only single input Tensor supported"
         input = input[0]
         assert len(input.shape) == 3, "input Tensor must have dimensions: (s)equence, (t)oken, (m)odel"
@@ -162,8 +165,12 @@ class MOELayer(Base):
             else:
                 padded_input_padding_mask[:reshaped_input_shape[0]] = False
             reshaped_input_padding_mask = padded_input_padding_mask
-
-        if has_tutel:
+        end.record()
+        torch.cuda.synchronize()
+        t = start.elapsed_time(end)
+        print("time spent in the first half of the MoE Layer: "+ str(t))
+        if has_tutel and False:
+            print("has tutel? "+str(has_tutel))
             l_aux, self.metadata, C, E, indices_, locations_, gates_ = self.gate(reshaped_input, reshaped_input_padding_mask)
             S, M = reshaped_input.size(0), reshaped_input.size(1)
 
@@ -172,46 +179,91 @@ class MOELayer(Base):
             self._tutel_dispatcher.update(indices_, locations_, gates_, capacity=C)
             dispatched_input = self._tutel_dispatcher.encode(reshaped_input)
         else:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
             l_aux, combine_weights, dispatch_mask, self.metadata = self.gate(reshaped_input, reshaped_input_padding_mask)
-            print('Dispatch masks: ')
-            print(dispatch_mask.shape)
-            print(dispatch_mask)
-            print('combine weights:')
-            print(combine_weights)
             dispatch_mask = dispatch_mask.to(input.dtype).permute(1, 2, 0)  # S,E,C -> E,C,S
             E, C, S = dispatch_mask.size()
             M = reshaped_input.size(1)
             assert reshaped_input.size() == (S, M)
             # einsum("sec,sm->ecm")
             dispatched_input = torch.mm(dispatch_mask.view(E*C, S), reshaped_input)  # -> (E*C),M
+            print(dispatch_mask)
             print('E :')
             print(E)
             print('C: '+str(C)+' S: '+str(S)+' M: '+str(M))
+            end.record()
+            torch.cuda.synchronize()
+            t= start.elapsed_time(end)
+            print ("MoE  Gating overhead: "+str(t))
 
         if self.all2all_size > 1:
             dispatched_input = self.all_to_all_wrapper(dispatched_input)
 
         # Re-shape after all-to-all: ecm -> gecm
+        start.record()
         dispatched_input = dispatched_input.reshape(self.all2all_size, self.num_local_experts, -1, d_model)
         chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
+        print("chunk, 207, MoE")
+        # print(chunks.shape)
         expert_outputs = []
         for chunk, expert in zip(chunks, self.experts):
-            expert_outputs += [expert(chunk)]
+                    print("I'm printing chunk")
+            # with torch.profiler.profile(activities=[
+            #             torch.profiler.ProfilerActivity.CPU,
+            #             torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
+            #     # schedule=torch.profiler.schedule(wait=1,
+            #     #                                  warmup=1,
+            #     #                                  active=2,
+            #     #                                  repeat=1),
+            #     # on_trace_ready=trace_handler_dense,
+            #     ) as s:
+                    start_1 = torch.cuda.Event(enable_timing=True)
+                    end_1 = torch.cuda.Event(enable_timing=True)
+                    print(chunk.shape)
+                    start_1.record()
+                    expert_outputs += [expert(chunk)]
+                    end_1.record()
+                    torch.cuda.synchronize()
+                    t = start_1.elapsed_time(end_1)
+                    print("time taken by 1 expert: "+str(t))
+                    # s.step()
+        
+        # s.export_chrome_trace("/ramyapra/fairseq/output_trace_moe_per_expert.json")
+        # y=s.key_averages().table(
+        # sort_by="self_cuda_time_total", row_limit=-1)
+        # print(y)
+        # with open('pytorch_moe_text_expert.txt','w') as f :
+        #     f.write(y)
+        #     f.write('\n')
+        #     f.write('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+    
+        
         expert_output = torch.cat(expert_outputs, dim=1)
-
+        print()
         if self.all2all_size > 1:
             expert_output = self.all_to_all_wrapper(expert_output)
 
         # Re-shape back: gecm -> ecm
         expert_output = expert_output.reshape(self.all2all_size * self.num_local_experts, -1, d_model)
-
-        if has_tutel:
+        end.record()
+        torch.cuda.synchronize()
+        t = start.elapsed_time(end)
+        print("Expert time: "+str(t))
+        if has_tutel and False:
             combined_output = self._tutel_dispatcher.decode(expert_output.view(E*C, M))
         else:
             # einsum("sec,ecm->sm")
+            start.record()
             combined_output = combine_weights.view(S, E*C).mm(expert_output.view(E*C, M))
+            end.record()
+            torch.cuda.synchronize()
+            t = start.elapsed_time(end)
+            print("Combine weights Moe: "+ str(t))
         print(combined_output.shape)
         print('combined output: ')
+        
         print(combined_output.shape)
         print('combined 2')
         print(combined_output[0][0])

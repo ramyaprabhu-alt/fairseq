@@ -77,6 +77,8 @@ def top2gating(
         capacity = math.ceil(moe_eval_capacity_token_fraction * num_tokens)
     else:
         # capacity = 2S/E
+        # print("80, capacity is 2/E!")
+        # exit(0)
         capacity = 2 * math.ceil(num_tokens / num_experts)
 
     # Create a mask for 1st's expert per token

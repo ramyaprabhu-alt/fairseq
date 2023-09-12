@@ -144,6 +144,9 @@ class MultiheadAttention(nn.Module):
         if need_head_weights:
             need_weights = True
 
+        # print("147, multihead_attn py, forward pass")
+        # print(key_padding_mask.shape)
+
         is_tpu = query.device.type == "xla"
 
         tgt_len, bsz, embed_dim = query.size()
@@ -169,6 +172,8 @@ class MultiheadAttention(nn.Module):
             and not torch.jit.is_scripting()
         ):
             assert key is not None and value is not None
+            print("175, multihead_attn py, forward pass")
+            print(key_padding_mask.shape)
             return F.multi_head_attention_forward(
                 query,
                 key,
@@ -234,6 +239,8 @@ class MultiheadAttention(nn.Module):
                     [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
                 )
             if key_padding_mask is not None:
+                print("237, multihead_attn py, forward pass")
+                print(key_padding_mask.shape)
                 key_padding_mask = torch.cat(
                     [
                         key_padding_mask,
@@ -286,6 +293,10 @@ class MultiheadAttention(nn.Module):
             if "prev_key_padding_mask" in saved_state:
                 prev_key_padding_mask = saved_state["prev_key_padding_mask"]
             assert k is not None and v is not None
+            print(k.shape)
+            print(v.shape)
+            # print(key_padding_mask.shape)
+            # if (k.shape[1]>src)
             key_padding_mask = MultiheadAttention._append_prev_key_padding_mask(
                 key_padding_mask=key_padding_mask,
                 prev_key_padding_mask=prev_key_padding_mask,
@@ -310,6 +321,7 @@ class MultiheadAttention(nn.Module):
             key_padding_mask = None
         print("src len, multihead attn py")
         print(src_len)
+        # print(key_padding_mask.shape)
         if key_padding_mask is not None:
             assert key_padding_mask.size(0) == bsz
             assert key_padding_mask.size(1) == src_len
@@ -405,6 +417,8 @@ class MultiheadAttention(nn.Module):
         if prev_key_padding_mask is not None and static_kv:
             new_key_padding_mask = prev_key_padding_mask
         elif prev_key_padding_mask is not None and key_padding_mask is not None:
+            print("multihead attn, 410, _append_prev_key_padding_mask")
+            print(key_padding_mask.shape)
             new_key_padding_mask = torch.cat(
                 [prev_key_padding_mask.float(), key_padding_mask.float()], dim=1
             )
@@ -435,6 +449,8 @@ class MultiheadAttention(nn.Module):
                 new_key_padding_mask = key_padding_mask.float()
         else:
             new_key_padding_mask = prev_key_padding_mask
+        if new_key_padding_mask is not None:
+            new_key_padding_mask=new_key_padding_mask[:, :src_len]
         return new_key_padding_mask
 
     @torch.jit.export

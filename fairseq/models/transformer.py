@@ -381,6 +381,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
             src_lengths=src_lengths,
             return_all_hiddens=return_all_hiddens,
         )
+        print("decoder_out 384 transformer py:")
+        print(decoder_out)
         return decoder_out
 
     # Since get_normalized_probs is in the Fairseq Model which is not scriptable,
@@ -721,6 +723,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
         self._future_mask = torch.empty(0)
+        self.kv_cache = dict()
 
         self.dropout_module = FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -872,15 +875,20 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.embed_positions is not None:
             positions = self.embed_positions(tokens, incremental_state=incremental_state)
 
-        if incremental_state is not None:
+        if incremental_state is not None and len(incremental_state.keys())!=0 :
+            print("line 877 transformers icrementatl state, forward embedding")
+            print(type(incremental_state))
             print(tokens.shape)
-            # tokens = tokens[:, -1:]
+            tokens = tokens[:, -1:]
             print(tokens.shape)
             if positions is not None:
                 positions = positions[:, -1:]
         
         if token_embedding is None:
+            print("886 transformers.py tokens: ")
+            print(tokens.device)
             token_embedding = self.embed_tokens(tokens)
+
         print(tokens.shape)
         x = embed = self.embed_scale * token_embedding
         print(x.shape)
@@ -958,6 +966,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if not features_only:
             x = self.output_layer(x)
         print("forward pass, transformer.py, 956")
+        print(extra)
         return x, extra
 
     def extract_features(
@@ -1030,6 +1039,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             l_aux = []
         else:
             l_aux = encoder_out["l_aux"] if "l_aux" in encoder_out else []
+        attn_times_tmp = []
+        ffn_times_tmp = []
         for idx, layer in enumerate(self.layers):
             if incremental_state is None and not full_context_alignment:
                 self_attn_mask = self.buffered_future_mask(x)
@@ -1037,7 +1048,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 self_attn_mask = None
             print("1031 transformer.py ")
             print(x.shape)
-            x, layer_attn, _, l_aux_i = layer(
+            x, layer_attn, _, l_aux_i, time_log = layer(
                 x,
                 encoder_out["encoder_out"][0]
                 if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
@@ -1060,7 +1071,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
                 attn = layer_attn.float().to(x)
-
+            
+            attn_times_tmp.append(time_log[0])
+            ffn_times_tmp.append(time_log[1])
+        print("ffn time tmp")
+        print(ffn_times_tmp)
+        attn_times = sum(attn_times_tmp)/len(attn_times_tmp)
+        ffn_times = sum(ffn_times_tmp)/len(ffn_times_tmp)
         if attn is not None:
             if alignment_heads is not None:
                 attn = attn[:alignment_heads]
@@ -1077,7 +1094,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {"attn": [attn], "inner_states": inner_states, "l_aux": l_aux}
+        return x, {"attn": [attn], "inner_states": inner_states, "l_aux": l_aux, "time_logs" : [attn_times, ffn_times]}
 
     def output_layer(self, features):
         """Project features to the vocabulary size."""
