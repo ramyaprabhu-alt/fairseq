@@ -82,8 +82,6 @@ class MOELayer(Base):
         else:
             self.experts = ModuleList([experts])
         self.expert_group = group if group is not None else distributed_utils.get_moe_group(args.moe_expert_count)
-        print("expert moe count: "+str(args.moe_expert_count))
-        print("expert self expert group: "+str(self.expert_group!=None))
         self.all2all_group = all2all_group if all2all_group is not None else distributed_utils.get_all2all_group(args.moe_expert_count)
         for p in experts.parameters():
             p.expert = True  # type: ignore
@@ -170,7 +168,6 @@ class MOELayer(Base):
         t = start.elapsed_time(end)
         print("time spent in the first half of the MoE Layer: "+ str(t))
         if has_tutel and False:
-            print("has tutel? "+str(has_tutel))
             l_aux, self.metadata, C, E, indices_, locations_, gates_ = self.gate(reshaped_input, reshaped_input_padding_mask)
             S, M = reshaped_input.size(0), reshaped_input.size(1)
 
@@ -189,10 +186,6 @@ class MOELayer(Base):
             assert reshaped_input.size() == (S, M)
             # einsum("sec,sm->ecm")
             dispatched_input = torch.mm(dispatch_mask.view(E*C, S), reshaped_input)  # -> (E*C),M
-            print(dispatch_mask)
-            print('E :')
-            print(E)
-            print('C: '+str(C)+' S: '+str(S)+' M: '+str(M))
             end.record()
             torch.cuda.synchronize()
             t= start.elapsed_time(end)
@@ -205,11 +198,9 @@ class MOELayer(Base):
         start.record()
         dispatched_input = dispatched_input.reshape(self.all2all_size, self.num_local_experts, -1, d_model)
         chunks = dispatched_input.chunk(self.num_local_experts, dim=1)
-        print("chunk, 207, MoE")
-        # print(chunks.shape)
+      
         expert_outputs = []
         for chunk, expert in zip(chunks, self.experts):
-                    print("I'm printing chunk")
             # with torch.profiler.profile(activities=[
             #             torch.profiler.ProfilerActivity.CPU,
             #             torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
@@ -221,7 +212,7 @@ class MOELayer(Base):
             #     ) as s:
                     start_1 = torch.cuda.Event(enable_timing=True)
                     end_1 = torch.cuda.Event(enable_timing=True)
-                    print(chunk.shape)
+                   
                     start_1.record()
                     expert_outputs += [expert(chunk)]
                     end_1.record()
@@ -241,7 +232,7 @@ class MOELayer(Base):
     
         
         expert_output = torch.cat(expert_outputs, dim=1)
-        print()
+   
         if self.all2all_size > 1:
             expert_output = self.all_to_all_wrapper(expert_output)
 
@@ -261,18 +252,11 @@ class MOELayer(Base):
             torch.cuda.synchronize()
             t = start.elapsed_time(end)
             print("Combine weights Moe: "+ str(t))
-        print(combined_output.shape)
-        print('combined output: ')
         
-        print(combined_output.shape)
-        print('combined 2')
-        print(combined_output[0][0])
         # Remove padding here when --max-tokens is specified and not --batch-size or --max-sentences
         combined_output = combined_output[:reshaped_input_shape[0], :]
         combined_output = combined_output.reshape(input.shape)
         combined_output = combined_output[:input_shape[0], :, :]
-        print('meta-data :')
-        print(self.metadata)
        
         self.record_all_to_all_stats()
 

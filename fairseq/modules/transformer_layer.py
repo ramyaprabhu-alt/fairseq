@@ -368,8 +368,6 @@ class TransformerDecoderLayer(nn.Module):
                 self.quant_noise_block_size,
             )
         else:
-            print('making MoE layer')
-
             if args.moe_top1_expert:
                 gate = Top1Gate(
                     self.embed_dim,
@@ -378,7 +376,6 @@ class TransformerDecoderLayer(nn.Module):
                     moe_eval_capacity_token_fraction=getattr(args, "moe_eval_capacity_token_fraction", 0.25),
                 )
             else:
-                print('layers gate top 2')
                 gate = Top2Gate(
                     self.embed_dim,
                     args.moe_expert_count,
@@ -463,7 +460,6 @@ class TransformerDecoderLayer(nn.Module):
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
-        print(x.shape)
         if need_head_weights:
             need_attn = True
 
@@ -481,10 +477,6 @@ class TransformerDecoderLayer(nn.Module):
             assert incremental_state is not None
             self.self_attn._set_input_buffer(incremental_state, saved_state)
         _self_attn_input_buffer = self.self_attn._get_input_buffer(incremental_state)
-        print("line 483, trnsformer layer ")
-        for i in incremental_state:
-            print(incremental_state[i]["prev_key"].shape)
-            print(incremental_state[i]['prev_value'].shape)
 
         if self.cross_self_attention and not (
             incremental_state is not None
@@ -509,13 +501,7 @@ class TransformerDecoderLayer(nn.Module):
             y = torch.cat((encoder_out, x), dim=0)
         else:
             y = x
-        # print("transformer layer, this is key padding mask:")
-        # print(self_attn_padding_mask.shape)
-        print("transformer layer py, incremental shape ")
-        for i in incremental_state:
-            print(incremental_state[i]["prev_key"].shape)
-        # if len(incremental_state.keys()) != 0:
-        #     self_attn_padding_mask=self_attn_padding_mask[:, ]
+      
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
@@ -530,10 +516,8 @@ class TransformerDecoderLayer(nn.Module):
         )
         end.record()
         torch.cuda.synchronize()
-        print("533 transformer layer py time for attention:")
         
         delta_1 = start.elapsed_time(end)
-        print(str(delta_1))
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
@@ -574,8 +558,6 @@ class TransformerDecoderLayer(nn.Module):
             x = self.final_layer_norm(x)
         if not self.is_moe_layer or getattr(self.args, "alternate_decoder_ffn_embed_dim", 0.0) > 0:
             start.record()
-            print("ffn time 577 transformer layer py ")
-            print(x.shape)
             with torch.profiler.profile(activities=[
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,],record_shapes=True,profile_memory=True,
@@ -585,8 +567,6 @@ class TransformerDecoderLayer(nn.Module):
                 #                                  repeat=1),
                 # on_trace_ready=trace_handler_dense,
                 ) as p:
-                    print("Printing shape for input to the FFN")
-                    print(x.shape)
                     x = _ffn(
                         x,
                         fc1=self.fc1,
@@ -600,7 +580,6 @@ class TransformerDecoderLayer(nn.Module):
             import datetime
             p.export_chrome_trace("output_trace_dense" + ".json")
             y=p.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1)
-            print(y)
             with open('pytorch_dense_text.txt','a') as f:
                 f.write(y)
                 f.write('\n')
@@ -608,9 +587,7 @@ class TransformerDecoderLayer(nn.Module):
 
             end.record()
             torch.cuda.synchronize()
-            print("586 transformer layer py time for feed forward network:")
             delta_2 = start.elapsed_time(end)
-            print(str(delta_2))
         else:
             # x - seq_len, batch_size, model_dim
             start.record()
@@ -634,7 +611,7 @@ class TransformerDecoderLayer(nn.Module):
                 # import datetime
                 p.export_chrome_trace("output_trace_moe" + ".json")
                 y=p.key_averages().table(sort_by="self_cuda_time_total", row_limit=-1)
-                print(y)
+                # print(y)
                 with open('pytorch_moe_text.txt','a') as f:
                     f.write(y)
                     f.write('\n')
@@ -642,9 +619,7 @@ class TransformerDecoderLayer(nn.Module):
             x = x.transpose(0, 1) # seq_len, batch_size, model_dim
             end.record()
             torch.cuda.synchronize()
-            print("599 transformer layer py time for moe layer time:")
             delta_2 = start.elapsed_time(end)
-            print(str(delta_2))
         x = self.residual_connection(x, residual)
         if not self.normalize_before:
             x = self.final_layer_norm(x)
@@ -676,7 +651,6 @@ def make_experts(args, embed_dim, expert_ffn_dim, dropout_module) -> nn.ModuleLi
         assert args.moe_expert_count % world_size == 0, f'{args.moe_expert_count}, {world_size}'
         local_moe_expert_count = args.moe_expert_count // world_size
         for i in range(local_moe_expert_count):
-            print("making expert # "+str(i))
             with utils.set_torch_seed(start_seed + ddp_rank * local_moe_expert_count + i):
                 expert_list.append(FeedForwardNetwork(args, embed_dim, expert_ffn_dim, dropout_module))
     # less experts than gpus

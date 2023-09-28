@@ -381,8 +381,6 @@ class TransformerModel(FairseqEncoderDecoderModel):
             src_lengths=src_lengths,
             return_all_hiddens=return_all_hiddens,
         )
-        print("decoder_out 384 transformer py:")
-        print(decoder_out)
         return decoder_out
 
     # Since get_normalized_probs is in the Fairseq Model which is not scriptable,
@@ -780,16 +778,13 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         else:
             self.layers = nn.ModuleList([])
         moe_freq = max(getattr(args, 'decoder_moe_freq', 0), getattr(args, 'moe_freq', 0))
-        print(moe_freq)
         for i in range(args.decoder_layers):
             is_moe_layer = moe_freq != 0 and (i + 1) % moe_freq == 0
-            print('Is MoE layer? 782'+str(is_moe_layer)+", no_encoder: "+str(no_encoder_attn))
             self.layers.append(
                 self.build_decoder_layer(
                     args, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer,
                 )
             )
-        print('line 789, transformers.py')
         self.num_layers = len(self.layers)
 
         if args.decoder_normalize_before and not getattr(
@@ -798,18 +793,14 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self.layer_norm = LayerNorm(embed_dim)
         else:
             self.layer_norm = None
-        print('line 798, transformers.py')
         self.project_out_dim = (
             Linear(embed_dim, self.output_embed_dim, bias=False)
             if embed_dim != self.output_embed_dim and not args.tie_adaptive_weights
             else None
         )
-        print('line 804, transformers.py')
         self.adaptive_softmax = None
         self.output_projection = None
-        print('line 807, transformers.py')
         if args.adaptive_softmax_cutoff is not None:
-            print('line 7, transformers.py')
             self.adaptive_softmax = AdaptiveSoftmax(
                 len(dictionary),
                 self.output_embed_dim,
@@ -821,17 +812,16 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             )
             
         elif self.share_input_output_embed:
-            print('line 8, transformers.py')
             self.output_projection = nn.Linear(
                 self.embed_tokens.weight.shape[1],
                 self.embed_tokens.weight.shape[0],
                 bias=False,
             )
-            print('out 1')
+           
             self.output_projection.weight = self.embed_tokens.weight
-            print('out 2')
+     
         else:
-            print('line 9, transformers.py')
+          
             self.output_projection = nn.Linear(
                 self.output_embed_dim, len(dictionary), bias=False
             )
@@ -841,11 +831,11 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
 
     def build_decoder_layer(self, args, no_encoder_attn=False, is_moe_layer=False):
-        print(args)
+       
         layer = fairseq.modules.TransformerDecoderLayer(
             args, no_encoder_attn=no_encoder_attn, is_moe_layer=is_moe_layer
         )
-        print('is_moe_layer: '+str(is_moe_layer))
+
         checkpoint = getattr(args, "checkpoint_activations", False)
         if checkpoint:
             offload_to_cpu = getattr(args, "offload_activations", False)
@@ -856,8 +846,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             getattr(args, "min_params_to_wrap", DEFAULT_MIN_PARAMS_TO_WRAP)
             if not checkpoint else 0
         )
-        print('printing moe expert count')
-        print(getattr(args, "moe_expert_count", -1))
+      
         if not is_moe_layer or getattr(args, "ddp_backend", None) != "fully_sharded":
             layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         else:
@@ -876,36 +865,27 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             positions = self.embed_positions(tokens, incremental_state=incremental_state)
 
         if incremental_state is not None and len(incremental_state.keys())!=0 :
-            print("line 877 transformers icrementatl state, forward embedding")
-            print(type(incremental_state))
-            print(tokens.shape)
+          
             tokens = tokens[:, -1:]
-            print(tokens.shape)
+       
             if positions is not None:
                 positions = positions[:, -1:]
         
         if token_embedding is None:
-            print("886 transformers.py tokens: ")
-            print(tokens.device)
+       
             token_embedding = self.embed_tokens(tokens)
 
-        print(tokens.shape)
+        
         x = embed = self.embed_scale * token_embedding
-        print(x.shape)
         if self.quant_noise is not None:
             x = self.quant_noise(x)
-        print(x.shape)
         if self.project_in_dim is not None:
             x = self.project_in_dim(x)
-        print(x.shape)
         if positions is not None:
             x += positions
-        print(x.shape)
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
-        print(x.shape)
         x = self.dropout_module(x)
-        print(x.shape)
         return x, embed
 
     def forward(
@@ -951,8 +931,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 - the decoder's output of shape `(batch, tgt_len, vocab)`
                 - a dictionary with any model-specific outputs
         """
-        print(prev_output_tokens.shape)
-        print("transformer py 945, check token size")
         x, extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -965,8 +943,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         )
         if not features_only:
             x = self.output_layer(x)
-        print("forward pass, transformer.py, 956")
-        print(extra)
         return x, extra
 
     def extract_features(
@@ -1007,7 +983,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         super().extract_features, but super() is not supported in torchscript. A copy
         of this function is made to be used in the subclass instead.
         """
-        print("transformer.py 997, in function extract_features_scriptable")
         if alignment_layer is None:
             alignment_layer = self.num_layers - 1
 
@@ -1024,14 +999,10 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
         # embed tokens and positions
-        print(prev_output_tokens.shape)
         x, _ = self.forward_embedding(prev_output_tokens, token_embeddings, incremental_state)
-        print('1017 transformers py, ')
-        print(x.shape)
+       
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
-        print("1021, transformers py x.shape")
-        print(x.shape)
         # decoder layers
         attn: Optional[Tensor] = None
         inner_states: List[Optional[Tensor]] = [x]
@@ -1046,8 +1017,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 self_attn_mask = self.buffered_future_mask(x)
             else:
                 self_attn_mask = None
-            print("1031 transformer.py ")
-            print(x.shape)
             x, layer_attn, _, l_aux_i, time_log = layer(
                 x,
                 encoder_out["encoder_out"][0]
@@ -1065,8 +1034,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
-            print("1048 transformer.py, x :")
-            print(x.shape)
             l_aux.append(l_aux_i)
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
@@ -1074,8 +1041,6 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             
             attn_times_tmp.append(time_log[0])
             ffn_times_tmp.append(time_log[1])
-        print("ffn time tmp")
-        print(ffn_times_tmp)
         attn_times = sum(attn_times_tmp)/len(attn_times_tmp)
         ffn_times = sum(ffn_times_tmp)/len(ffn_times_tmp)
         if attn is not None:
